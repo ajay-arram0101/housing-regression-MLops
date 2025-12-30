@@ -10,7 +10,8 @@ import json
 # ============================
 # Config
 # ============================
-API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000/predict")
+API_URL = os.getenv("API_URL", "http://housing-api-alb-209669040.us-east-2.elb.amazonaws.com:8000/predict")
+
 S3_BUCKET = os.getenv("S3_BUCKET", "housing-regression-data-ajayr")
 REGION = os.getenv("AWS_REGION", "us-east-2")
 
@@ -21,7 +22,7 @@ def load_from_s3(key, local_path):
     local_path = Path(local_path)
     if not local_path.exists():
         os.makedirs(local_path.parent, exist_ok=True)
-        st.info(f"📥 Downloading {key} from S3…")
+        st.info(f"Downloading {key} from S3")
         s3.download_file(S3_BUCKET, key, str(local_path))
     return str(local_path)
 
