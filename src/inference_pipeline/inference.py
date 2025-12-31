@@ -83,6 +83,12 @@ def predict(
     # Step 5: Align columns with training schema
     if TRAIN_FEATURE_COLUMNS is not None:
         df = df.reindex(columns=TRAIN_FEATURE_COLUMNS, fill_value=0)
+    
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    if 'city_full' not in df.columns:
+        print("Warning: city_full column missing")
 
     # Step 6: Load model & predict
     model = load(model_path)
