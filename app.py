@@ -146,6 +146,7 @@ if st.button("Show Predictions"):
                 yearly_data = disp_df[disp_df["year"] == year].copy()
                 idx_all = yearly_data.index
                 payload_all = fe_df.loc[idx_all].to_dict(orient="records")
+                payload_all = clean_payload(payload_all)
 
                 resp_all = requests.post(API_URL, json=payload_all, timeout=60)
                 resp_all.raise_for_status()
@@ -157,6 +158,7 @@ if st.button("Show Predictions"):
                 yearly_data = disp_df[(disp_df["year"] == year) & (disp_df["region"] == region)].copy()
                 idx_region = yearly_data.index
                 payload_region = fe_df.loc[idx_region].to_dict(orient="records")
+                payload_region = clean_payload(payload_region)
 
                 resp_region = requests.post(API_URL, json=payload_region, timeout=60)
                 resp_region.raise_for_status()
