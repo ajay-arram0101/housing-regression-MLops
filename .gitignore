@@ -52,3 +52,16 @@ Thumbs.db
 *.pid
 *.tar
 *.lock.json
+
+# ==========================================
+# Lambda deployment artifacts (large files)
+# ==========================================
+*.zip
+lambda_deploy/
+lambda_package/
+lambda_minimal/
+lambda_code/
+layer_build/
+layer_full/
+layer_xgb/
+temp_scipy/
