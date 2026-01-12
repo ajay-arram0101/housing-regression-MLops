@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Housing Prediction API - Lambda + API Gateway (ECS Migration)
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: housing-regression-data-ajayr
+    Description: S3 bucket containing Lambda code and data
+  
+  LambdaCodeKey:
+    Type: String
+    Default: lambda/lambda_function.zip
+    Description: S3 key for Lambda deployment package
+
+Resources:
+  # ============================================
+  # IAM Role for Lambda
+  # ============================================
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: housing-prediction-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+
+  # ============================================
+  # Lambda Functions
+  # ============================================
+  
+  PredictFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: housing-predict
+      Runtime: python3.11
+      Handler: src.api.handlers.predict.lambda_handler
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 1024
+      Timeout: 60
+      EphemeralStorage:
+        Size: 512
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3BucketName
+          AWS_REGION_NAME: !Ref AWS::Region
+
+  HealthFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: housing-health
+      Runtime: python3.11
+      Handler: src.api.handlers.health.lambda_handler
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3BucketName
+          AWS_REGION_NAME: !Ref AWS::Region
+
+  BatchFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: housing-batch
+      Runtime: python3.11
+      Handler: src.api.handlers.batch.lambda_handler
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 2048
+      Timeout: 900
+      EphemeralStorage:
+        Size: 1024
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3BucketName
+          AWS_REGION_NAME: !Ref AWS::Region
+
+  PredictionsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: housing-predictions
+      Runtime: python3.11
+      Handler: src.api.handlers.predictions.lambda_handler
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 256
+      Timeout: 20
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3BucketName
+          AWS_REGION_NAME: !Ref AWS::Region
+
+  # ============================================
+  # API Gateway REST API
+  # ============================================
+  
+  HousingApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: housing-prediction-api
+      Description: Housing Price Prediction API (Lambda Backend)
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # /predict resource
+  PredictResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HousingApi
+      ParentId: !GetAtt HousingApi.RootResourceId
+      PathPart: predict
+
+  PredictMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HousingApi
+      ResourceId: !Ref PredictResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PredictFunction.Arn}/invocations'
+
+  # /health resource
+  HealthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HousingApi
+      ParentId: !GetAtt HousingApi.RootResourceId
+      PathPart: health
+
+  HealthMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HousingApi
+      ResourceId: !Ref HealthResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HealthFunction.Arn}/invocations'
+
+  # /run_batch resource
+  BatchResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HousingApi
+      ParentId: !GetAtt HousingApi.RootResourceId
+      PathPart: run_batch
+
+  BatchMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HousingApi
+      ResourceId: !Ref BatchResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BatchFunction.Arn}/invocations'
+
+  # /latest_predictions resource
+  PredictionsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref HousingApi
+      ParentId: !GetAtt HousingApi.RootResourceId
+      PathPart: latest_predictions
+
+  PredictionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HousingApi
+      ResourceId: !Ref PredictionsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PredictionsFunction.Arn}/invocations'
+
+  # Root resource (/)
+  RootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref HousingApi
+      ResourceId: !GetAtt HousingApi.RootResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HealthFunction.Arn}/invocations'
+
+  # ============================================
+  # Lambda Permissions for API Gateway
+  # ============================================
+  
+  PredictPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PredictFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HousingApi}/*/*/*'
+
+  HealthPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref HealthFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HousingApi}/*/*/*'
+
+  BatchPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BatchFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HousingApi}/*/*/*'
+
+  PredictionsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PredictionsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HousingApi}/*/*/*'
+
+  # ============================================
+  # API Gateway Deployment
+  # ============================================
+  
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PredictMethod
+      - HealthMethod
+      - BatchMethod
+      - PredictionsMethod
+      - RootMethod
+    Properties:
+      RestApiId: !Ref HousingApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref HousingApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+
+  # ============================================
+  # CloudWatch Log Group
+  # ============================================
+  
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/housing-prediction-api
+      RetentionInDays: 30
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${HousingApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: HousingApiEndpoint
+
+  PredictEndpoint:
+    Description: Predict endpoint URL
+    Value: !Sub 'https://${HousingApi}.execute-api.${AWS::Region}.amazonaws.com/prod/predict'
+
+  HealthEndpoint:
+    Description: Health check endpoint URL
+    Value: !Sub 'https://${HousingApi}.execute-api.${AWS::Region}.amazonaws.com/prod/health'

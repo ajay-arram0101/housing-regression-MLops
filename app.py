@@ -10,7 +10,8 @@ import json
 # ============================
 # Config
 # ============================
-API_URL = os.getenv("API_URL", "http://housing-api-alb-209669040.us-east-2.elb.amazonaws.com:8000/predict")
+# Lambda + API Gateway endpoint (migrated from ECS + ALB)
+API_URL = os.getenv("API_URL", "https://nqhku2ro67.execute-api.us-east-2.amazonaws.com/prod/predict")
 
 S3_BUCKET = os.getenv("S3_BUCKET", "housing-regression-data-ajayr")
 REGION = os.getenv("AWS_REGION", "us-east-2")
@@ -67,7 +68,7 @@ def clean_payload(data):
         return [clean_payload(item) for item in data]
     elif isinstance(data, float):
         if np.isnan(data) or np.isinf(data):
-            return None  # or 0, or some default value
+            return 0.0  # Replace NaN/Inf with 0 for JSON compatibility
         return data
     return data
 

@@ -1,0 +1,280 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Housing Prediction API - Lambda + API Gateway (SAM)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.11
+    Tracing: Active
+    Environment:
+      Variables:
+        S3_BUCKET: !Ref DataBucketName
+        AWS_REGION: !Ref AWS::Region
+    Layers:
+      - !Ref DependenciesLayer
+
+Parameters:
+  DataBucketName:
+    Type: String
+    Default: housing-regression-data-ajayr
+    Description: S3 bucket name for models and data
+
+Resources:
+  # ============================================
+  # IAM Role
+  # ============================================
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: housing-prediction-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${DataBucketName}'
+                  - !Sub 'arn:aws:s3:::${DataBucketName}/*'
+
+  # ============================================
+  # Lambda Layer
+  # ============================================
+  
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: housing-dependencies
+      Description: Shared dependencies (numpy, pandas, sklearn, xgboost, boto3)
+      ContentUri: src/lambda_layers/shared_dependencies
+      CompatibleRuntimes:
+        - python3.11
+
+  # ============================================
+  # Lambda Functions
+  # ============================================
+  
+  PredictFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: housing-predict
+      CodeUri: .
+      Handler: src.api.handlers.predict.lambda_handler
+      Runtime: python3.11
+      MemorySize: 1024
+      Timeout: 30
+      Role: !GetAtt LambdaExecutionRole.Arn
+      EphemeralStorage:
+        Size: 512
+      Events:
+        PredictAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref HousingApi
+            Path: /predict
+            Method: POST
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: housing-health
+      CodeUri: .
+      Handler: src.api.handlers.health.lambda_handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 10
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        HealthAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref HousingApi
+            Path: /health
+            Method: GET
+
+  BatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: housing-batch
+      CodeUri: .
+      Handler: src.api.handlers.batch.lambda_handler
+      Runtime: python3.11
+      MemorySize: 2048
+      Timeout: 900  # 15 minutes
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        BatchAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref HousingApi
+            Path: /run_batch
+            Method: POST
+
+  PredictionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: housing-predictions
+      CodeUri: .
+      Handler: src.api.handlers.predictions.lambda_handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        PredictionsAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref HousingApi
+            Path: /latest_predictions
+            Method: GET
+
+  # ============================================
+  # API Gateway
+  # ============================================
+  
+  HousingApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: housing-prediction-api
+      StageName: prod
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+      Variables:
+        Stack: !Ref AWS::StackName
+
+  # ============================================
+  # CloudWatch Logs
+  # ============================================
+  
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/housing-prediction-api
+      RetentionInDays: 30
+
+  # ============================================
+  # SNS Topic for Alerts
+  # ============================================
+  
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: housing-prediction-alerts
+      DisplayName: Housing Prediction Lambda Alerts
+
+  # ============================================
+  # CloudWatch Alarms
+  # ============================================
+  
+  PredictErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: housing-predict-errors
+      AlarmDescription: Alert when predict function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PredictFunction
+      AlarmActions:
+        - !Ref AlertTopic
+
+  HealthErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: housing-health-errors
+      AlarmDescription: Alert when health function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref HealthFunction
+      AlarmActions:
+        - !Ref AlertTopic
+
+  HighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: housing-api-high-latency
+      AlarmDescription: Alert when API latency is high
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10000  # 10 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PredictFunction
+      AlarmActions:
+        - !Ref AlertTopic
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${HousingApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  PredictFunctionArn:
+    Description: Predict Lambda function ARN
+    Value: !GetAtt PredictFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-PredictFunctionArn'
+
+  HealthFunctionArn:
+    Description: Health Lambda function ARN
+    Value: !GetAtt HealthFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-HealthFunctionArn'
+
+  BatchFunctionArn:
+    Description: Batch Lambda function ARN
+    Value: !GetAtt BatchFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BatchFunctionArn'
+
+  AlertTopicArn:
+    Description: SNS Topic for alerts
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlertTopicArn'
+
+  ApiLogGroup:
+    Description: CloudWatch log group for API
+    Value: !Ref ApiLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiLogGroup'

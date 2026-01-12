@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+  
+  build:
+    commands:
+      - echo Building Docker image...
+      - docker build -t housing-lambda -f Dockerfile.lambda .
+      - docker tag housing-lambda:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/housing-lambda:latest
+  
+  post_build:
+    commands:
+      - echo Pushing Docker image...
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/housing-lambda:latest
+      - echo Updating Lambda function...
+      - aws lambda update-function-code --function-name housing-predict --image-uri $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/housing-lambda:latest --region $AWS_REGION
